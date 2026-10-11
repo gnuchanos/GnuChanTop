@@ -1,0 +1,31 @@
+# ── Build output ────────────────────────────────────────────────────────────
+#
+# src/makefile.py writes everything it produces under _temp/ at this
+# repository's root — the binary and every object file — so a build never
+# dirties the working tree and `git pull` is never blocked by a leftover.
+# Nothing under it is source.
+_temp/
+
+# A binary or object a hand-run gcc left behind. The makefile does not write
+# any of these into the tree, but a manual build can, and they should not be
+# committed.
+*.o
+*.a
+*.exe
+*.out
+*.so
+*.dylib
+
+# ── Python cache ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+
+# ── OS and editor leftovers ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+nul
