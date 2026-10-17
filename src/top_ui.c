@@ -86,6 +86,8 @@ int top_ui_init(TopState *state) {
     return 0;
 }
 
+static int visible_rows(const TopState *state);
+
 /* Take every sample for one frame and push the histories. */
 static void take_sample(TopState *state) {
     top_cpu_sample(&state->cpu);
@@ -103,6 +105,7 @@ static void take_sample(TopState *state) {
         top_history_push(&state->gpu_history, primary->usage);
     }
     top_procs_sort(&state->procs, state->config.sort);
+    top_procs_move(&state->procs, 0, visible_rows(state));
     state->samples++;
 }
 
@@ -123,14 +126,13 @@ static void draw(TopState *state) {
     top_draw_frame(&frame);
 }
 
-/* How many process rows fit, which the cursor movement needs. */
-static int visible_rows(void) {
+/* How many process rows fit below the dynamically sized CPU panel. */
+static int visible_rows(const TopState *state) {
     TopSize size = top_term_size();
-    /* The header(1) + band(PANEL_ROWS) + memory(1) + columns(1) + status(1). The
-       draw code uses PANEL_ROWS of 6; mirroring it here keeps the cursor from
-       scrolling off the visible list. */
-    int used = 1 + 6 + 1 + 1 + 1;
-    int rows = size.rows - used;
+    /* top_draw_frame uses one line per CPU core, then a total and graph, followed
+       by the memory box, process border/header, and bottom status row. */
+    int cores = state->cpu.core_count > 0 ? state->cpu.core_count : 1;
+    int rows = size.rows - cores - 12;
     return rows > 0 ? rows : 1;
 }
 
@@ -188,6 +190,7 @@ static void cycle_sort(TopState *state, int step) {
     index = (index + step + count) % count;
     state->config.sort = order[index];
     top_procs_sort(&state->procs, state->config.sort);
+    top_procs_move(&state->procs, 0, visible_rows(state));
 }
 
 int top_ui_run(TopState *state) {
@@ -210,19 +213,21 @@ int top_ui_run(TopState *state) {
         if (got) {
             switch (key.kind) {
                 case TOP_KEY_UP:
-                    top_procs_move(&state->procs, -1, visible_rows());
+                    top_procs_move(&state->procs, -1, visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_DOWN:
-                    top_procs_move(&state->procs, 1, visible_rows());
+                    top_procs_move(&state->procs, 1, visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_PAGE_UP:
-                    top_procs_move(&state->procs, -visible_rows(), visible_rows());
+                    top_procs_move(&state->procs, -visible_rows(state),
+                                   visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_PAGE_DOWN:
-                    top_procs_move(&state->procs, visible_rows(), visible_rows());
+                    top_procs_move(&state->procs, visible_rows(state),
+                                   visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_LEFT:
@@ -235,12 +240,12 @@ int top_ui_run(TopState *state) {
                     break;
                 case TOP_KEY_HOME:
                     top_procs_move(&state->procs, -state->procs.count,
-                                   visible_rows());
+                                   visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_END:
                     top_procs_move(&state->procs, state->procs.count,
-                                   visible_rows());
+                                   visible_rows(state));
                     needs_draw = 1;
                     break;
                 case TOP_KEY_ESCAPE:

@@ -203,35 +203,9 @@ static long read_file(const char *path, char *out, size_t size) {
 
 /* --- the sample ------------------------------------------------------------ */
 
-/* The machine's physical memory, for the per-process percentage. */
-static unsigned long long physical_total_kb = 0;
-
-static void ensure_physical_total(void) {
-    if (physical_total_kb != 0) {
-        return;
-    }
-    char line[256];
-    FILE *file = fopen("/proc/meminfo", "r");
-    if (!file) {
-        physical_total_kb = 1;
-        return;
-    }
-    while (fgets(line, sizeof(line), file)) {
-        if (strncmp(line, "MemTotal:", 9) == 0) {
-            physical_total_kb = strtoull(line + 9, NULL, 10);
-            break;
-        }
-    }
-    fclose(file);
-    if (physical_total_kb == 0) {
-        physical_total_kb = 1;
-    }
-}
-
 int top_procs_sample(TopProcs *list, long long total_jiffies, int num_cores,
                      const TopConfig *config) {
     (void)config;
-    ensure_physical_total();
 
     long long total_delta = total_jiffies - list->total_jiffies;
     if (list->total_jiffies == 0 || total_delta <= 0) {
@@ -267,7 +241,7 @@ int top_procs_sample(TopProcs *list, long long total_jiffies, int num_cores,
             continue;
         }
         int pid = atoi(entry->d_name);
-        if (pid <= 0) {
+        if (pid <= 0 || pid == (int)getpid()) {
             continue;
         }
 
@@ -323,7 +297,6 @@ int top_procs_sample(TopProcs *list, long long total_jiffies, int num_cores,
             rss_kb = rss_from_status(status);
         }
         row->rss_kb = rss_kb;
-        row->mem = ((double)rss_kb * 100.0) / (double)physical_total_kb;
 
         /* The CPU share, from the process's previous jiffies and the machine's
            previous total. No previous sample means no share yet. */

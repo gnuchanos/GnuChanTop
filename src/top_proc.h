@@ -29,7 +29,6 @@ typedef struct {
     char  name[TOP_TEXT];      /* the command line, or the comm when there is none */
     char  state;               /* the single-letter state from stat */
     double cpu;                /* 0..100 * cores, the share of the interval */
-    double mem;                /* 0..100 of physical memory */
     unsigned long long rss_kb;
     unsigned long long last_cpu_jiffies; /* so the next sample can difference it */
     int   is_new;              /* no previous sample; its cpu is not drawn yet */

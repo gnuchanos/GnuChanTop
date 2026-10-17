@@ -6,6 +6,9 @@ keys walk and `k` kills from. It reads `/proc` and sysfs directly and draws to
 the terminal. It is written in C, uses libdrm for legacy Radeon utilization, and
 is Debian-only, on purpose.
 
+The process table omits GnuChanTop itself and reports each process's resident
+memory in megabytes (`RSS MB`), alongside CPU percentage.
+
 Every GPU the machine has is listed, one to a line by name: an AMD APU, an Intel
 iGPU, a discrete card that loaded as `card1`, all of them, not only `card0`.
 The older AMD `radeon` driver exposes its GRBM GUI-active status through DRM;

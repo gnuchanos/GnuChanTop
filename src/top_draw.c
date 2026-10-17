@@ -227,7 +227,7 @@ static void draw_meter(int row, int left, int width, const char *label,
 static void draw_columns(int row, int left) {
     move_to(row, left + 2);
     fg(DIM_R, DIM_G, DIM_B);
-    printf("%-6s %-9s %6s %6s %-4s %s", "PID", "USER", "CPU%", "MEM%",
+    printf("%-6s %-9s %6s %7s %-4s %s", "PID", "USER", "CPU%", "RSS MB",
            "S", "COMMAND");
     fputs(RESET, stdout);
 }
@@ -246,8 +246,8 @@ static void draw_process(int row, int left, const TopProc *proc, int selected,
     if (name_width > 0 && (int)strlen(name) > name_width) {
         name[name_width] = '\0';
     }
-    printf("%-6d %-9.9s %6.1f %6.1f %-4c %s", proc->pid, proc->user,
-           proc->cpu, proc->mem, proc->state, name);
+    printf("%-6d %-9.9s %6.1f %7.1f %-4c %s", proc->pid, proc->user,
+           proc->cpu, (double)proc->rss_kb / 1024.0, proc->state, name);
     fputs(RESET, stdout);
 }
 
@@ -444,7 +444,7 @@ void top_draw_frame(const TopFrame *frame) {
     box_row(proc_header, 1, width, ACCENT_R, ACCENT_G, ACCENT_B);
     draw_columns(proc_header, 1);
 
-    int name_width = width - 42;
+    int name_width = width - 43;
     if (name_width < 8) {
         name_width = 8;
     }
