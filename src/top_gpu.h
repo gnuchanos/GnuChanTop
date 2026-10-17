@@ -12,7 +12,7 @@
  * be read from a card depends on its driver:
  *
  *   amdgpu    /sys/class/drm/cardN/device/gpu_busy_percent is one integer 0..100.
- *   radeon    /sys/kernel/debug/dri/<minor>/radeon_pm_info reports GPU load.
+ *   radeon    GRBM GUI-active status, averaged from low-rate DRM register reads.
  *   i915      per-engine millisecond counters under the card's gt directory,
  *             differenced between two reads, or the i915 perf event on older
  *             parts. See top_gpu.c.

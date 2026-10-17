@@ -24,8 +24,8 @@
  *      interval. Needs the CAP_PERFMON the installer grants and the
  *      perf_event_paranoid the installer lowers.
  *
- *   4. radeon. The older AMD driver reports its current load in the DRM
- *      debugfs file radeon_pm_info rather than the amdgpu sysfs attribute.
+ *   4. radeon. The older AMD driver exposes its GRBM status register through
+ *      libdrm; the GUI-active bit is averaged in a low-rate background sampler.
  *
  *   5. Other drivers without a readable busy counter are still listed, because
  *      hiding them would report a machine that has no GPU.
@@ -37,7 +37,9 @@
 #include "top_gpu.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <linux/perf_event.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,12 +47,18 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+#include <radeon_drm.h>
+#include <xf86drm.h>
 
 /* The DRM class directory, where every card is a `cardN` entry. */
 #define DRM_DIR "/sys/class/drm"
 
 /* The most engine counters one card's i915 path tracks. */
 #define GPU_MAX_ENGINES 16
+#define RADEON_SAMPLE_COUNT 20
+#define RADEON_SAMPLE_INTERVAL_NS 50000000L
+#define RADEON_GRBM_STATUS 0x8010
+#define RADEON_GUI_ACTIVE (1U << 31)
 
 /* --- reading helpers ------------------------------------------------------- */
 
@@ -142,6 +150,16 @@ typedef struct {
     long long     perf_last_busy_ns;
     long long     perf_last_wall_ns;
     int           perf_seen;
+    int           radeon_tried;
+    int           radeon_fd;
+    int           radeon_started;
+    pthread_t     radeon_thread;
+    pthread_mutex_t radeon_mutex;
+    unsigned int  radeon_samples[RADEON_SAMPLE_COUNT];
+    int           radeon_sample_count;
+    int           radeon_sample_next;
+    double        radeon_usage;
+    int           radeon_has_reading;
 } GpuReader;
 
 static GpuReader readers[TOP_MAX_GPUS];
@@ -357,65 +375,133 @@ static int sample_percent(const char *card, TopGpuDevice *device) {
     return 0;
 }
 
-/* The older radeon driver publishes its current GPU load in debugfs instead of
-   the amdgpu gpu_busy_percent sysfs attribute. Resolve the DRM minor from this
-   card's device node so the same path works for every card, not just card0. */
-static int sample_radeon_debugfs(TopGpuDevice *device) {
+static int open_render_node(const char *card) {
+    char primary[TOP_TEXT];
+    snprintf(primary, sizeof(primary), "/dev/dri/%.16s", card);
+
+    int count = drmGetDevices2(0, NULL, 0);
+    if (count <= 0) {
+        return -1;
+    }
+    drmDevicePtr *devices = calloc((size_t)count, sizeof(*devices));
+    if (!devices) {
+        return -1;
+    }
+    count = drmGetDevices2(0, devices, count);
+    int fd = -1;
+    if (count > 0) {
+        for (int i = 0; i < count; i++) {
+            if (!devices[i] || !(devices[i]->available_nodes &
+                                 (1 << DRM_NODE_PRIMARY)) ||
+                strcmp(devices[i]->nodes[DRM_NODE_PRIMARY], primary) != 0 ||
+                !(devices[i]->available_nodes & (1 << DRM_NODE_RENDER))) {
+                continue;
+            }
+            fd = open(devices[i]->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+            break;
+        }
+        drmFreeDevices(devices, count);
+    }
+    free(devices);
+    return fd;
+}
+
+static int read_radeon_grbm(int fd, unsigned int *status) {
+    unsigned int reg = RADEON_GRBM_STATUS;
+    struct drm_radeon_info info;
+    memset(&info, 0, sizeof(info));
+    info.request = RADEON_INFO_READ_REG;
+    info.value = (unsigned long)&reg;
+    if (drmCommandWriteRead(fd, DRM_RADEON_INFO, &info, sizeof(info)) != 0) {
+        return -1;
+    }
+    *status = reg;
+    return 0;
+}
+
+static void *radeon_sampler(void *argument) {
+    GpuReader *reader = argument;
+    const struct timespec interval = {
+        .tv_sec = 0,
+        .tv_nsec = RADEON_SAMPLE_INTERVAL_NS
+    };
+
+    for (;;) {
+        unsigned int status = 0;
+        if (read_radeon_grbm(reader->radeon_fd, &status) != 0) {
+            pthread_mutex_lock(&reader->radeon_mutex);
+            reader->radeon_has_reading = 0;
+            pthread_mutex_unlock(&reader->radeon_mutex);
+            return NULL;
+        }
+
+        pthread_mutex_lock(&reader->radeon_mutex);
+        reader->radeon_samples[reader->radeon_sample_next] =
+            (status & RADEON_GUI_ACTIVE) != 0;
+        reader->radeon_sample_next =
+            (reader->radeon_sample_next + 1) % RADEON_SAMPLE_COUNT;
+        if (reader->radeon_sample_count < RADEON_SAMPLE_COUNT) {
+            reader->radeon_sample_count++;
+        }
+        unsigned int busy_samples = 0;
+        for (int i = 0; i < reader->radeon_sample_count; i++) {
+            busy_samples += reader->radeon_samples[i];
+        }
+        reader->radeon_usage =
+            100.0 * (double)busy_samples / (double)reader->radeon_sample_count;
+        reader->radeon_has_reading = 1;
+        pthread_mutex_unlock(&reader->radeon_mutex);
+
+        nanosleep(&interval, NULL);
+    }
+}
+
+/* Sample the legacy Radeon GRBM GUI-active bit at 20 Hz in a background thread.
+   Each sample is a single DRM register query; averaging the latest second
+   produces a utilization percentage without delaying the UI refresh loop. */
+static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
     if (strcmp(device->driver, "radeon") != 0) {
         return -1;
     }
-
-    char path[TOP_TEXT];
-    snprintf(path, sizeof(path), DRM_DIR "/%.16s/dev", device->card);
-    unsigned int major = 0;
-    unsigned int minor = 0;
-    FILE *dev_file = fopen(path, "r");
-    if (!dev_file) {
-        return -1;
-    }
-    int matched = fscanf(dev_file, "%u:%u", &major, &minor);
-    fclose(dev_file);
-    if (matched != 2) {
-        return -1;
-    }
-    (void)major;
-
-    snprintf(path, sizeof(path),
-             "/sys/kernel/debug/dri/%u/radeon_pm_info", minor);
-    FILE *file = fopen(path, "r");
-    if (!file) {
-        return -1;
-    }
-
-    long percent = -1;
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
-        char *load = strstr(line, "GPU load:");
-        if (!load) {
-            continue;
+    if (!reader->radeon_tried) {
+        reader->radeon_tried = 1;
+        reader->radeon_fd = open_render_node(device->card);
+        if (reader->radeon_fd < 0) {
+            return -1;
         }
-        char *value = strchr(load, ':');
-        if (value) {
-            char *end = NULL;
-            long parsed = strtol(value + 1, &end, 10);
-            if (end != value + 1) {
-                percent = parsed;
-            }
+        unsigned int status = 0;
+        if (read_radeon_grbm(reader->radeon_fd, &status) != 0) {
+            close(reader->radeon_fd);
+            reader->radeon_fd = -1;
+            return -1;
         }
-        break;
+        int mutex_error = pthread_mutex_init(&reader->radeon_mutex, NULL);
+        if (mutex_error != 0) {
+            close(reader->radeon_fd);
+            reader->radeon_fd = -1;
+            return -1;
+        }
+        int thread_error = pthread_create(&reader->radeon_thread, NULL,
+                                         radeon_sampler, reader);
+        if (thread_error != 0) {
+            pthread_mutex_destroy(&reader->radeon_mutex);
+            close(reader->radeon_fd);
+            reader->radeon_fd = -1;
+            return -1;
+        }
+        pthread_detach(reader->radeon_thread);
+        reader->radeon_started = 1;
     }
-    fclose(file);
-
-    if (percent < 0) {
+    if (!reader->radeon_started) {
         return -1;
     }
-    if (percent > 100) {
-        percent = 100;
-    }
-    device->usage = (double)percent;
-    device->has_reading = 1;
-    device->present = 1;
-    return 0;
+
+    pthread_mutex_lock(&reader->radeon_mutex);
+    device->usage = reader->radeon_usage;
+    device->has_reading = reader->radeon_has_reading;
+    pthread_mutex_unlock(&reader->radeon_mutex);
+    device->present = device->has_reading;
+    return device->has_reading ? 0 : -1;
 }
 
 /* Take one card's reading, whichever way its driver allows. */
@@ -423,7 +509,7 @@ static void sample_device(TopGpuDevice *device, GpuReader *reader) {
     if (sample_percent(device->card, device) == 0) {
         return;
     }
-    if (sample_radeon_debugfs(device) == 0) {
+    if (sample_radeon_registers(device, reader) == 0) {
         return;
     }
     if (sample_engines(reader, device) == 0) {

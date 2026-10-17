@@ -7,11 +7,8 @@
 #     python3 makefile.py run        compile and run it here
 #     python3 makefile.py uninstall  remove the binary
 #
-# GnuChanTop is a C program with no library but libc. It reads /proc and sysfs
-# directly and draws a btop-shaped monitor to the terminal: a CPU panel on the
-# left of the top bar, a GPU panel on the right, and a process list below that
-# the arrow keys walk and `k` kills from. Nothing is fetched and nothing is
-# linked, so the build is one gcc line and the only dependency is a compiler.
+# GnuChanTop reads /proc and sysfs directly and uses libdrm for legacy Radeon
+# GPU utilization. It draws a btop-shaped monitor to the terminal.
 #
 # Debian only, on purpose.
 #
@@ -22,6 +19,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -130,15 +128,16 @@ def is_debian() -> bool:
 
 
 def missing_build_dependencies() -> list[str]:
-    """Which packages this machine is missing to build the program.
-
-    There is one: a C compiler. The program links nothing but libc, so there is
-    no header to probe for and no library to name — build-essential is the whole
-    of it.
-    """
+    """Which packages this machine is missing to build the program."""
     needed: list[str] = []
     if shutil.which("gcc") is None:
         needed.append("build-essential")
+    pkg_config = shutil.which("pkg-config")
+    if pkg_config is None:
+        needed.append("pkgconf")
+        needed.append("libdrm-dev")
+    elif run([pkg_config, "--exists", "libdrm"], capture=True).returncode != 0:
+        needed.append("libdrm-dev")
     return needed
 
 
@@ -176,9 +175,23 @@ def build() -> Path:
     command = [
         "gcc", "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter",
         "-O2", "-D_DEFAULT_SOURCE", "-D_POSIX_C_SOURCE=200809L",
+        "-pthread",
         "-I", str(ROOT),
     ]
+    pkg_config = shutil.which("pkg-config")
+    if pkg_config is None:
+        raise SystemExit("error: pkg-config is required to build with libdrm")
+    result = run([pkg_config, "--cflags", "libdrm"], capture=True, cwd=ROOT)
+    if result.returncode != 0:
+        raise SystemExit("error: could not get libdrm compiler flags: " +
+                         result.stderr.strip())
+    command += shlex.split(result.stdout)
     command += [str(ROOT / name) for name in SOURCES]
+    result = run([pkg_config, "--libs", "libdrm"], capture=True, cwd=ROOT)
+    if result.returncode != 0:
+        raise SystemExit("error: could not get libdrm linker flags: " +
+                         result.stderr.strip())
+    command += shlex.split(result.stdout)
     command += ["-o", str(output)]
     # -lm is needed for the graph drawing, which uses floor/round on a curve.
     command += ["-lm"]
@@ -215,6 +228,7 @@ def install(binary: Path) -> None:
     os.replace(str(staged), str(target))
     detail(f"installed {target}")
 
+    grant_render_access()
     grant_perfmon(target)
     allow_perf_events()
     install_config()
@@ -251,8 +265,34 @@ def allow_perf_events() -> None:
         detail("the sysctl takes effect after a reboot")
 
 
+def grant_render_access() -> None:
+    """Grant the invoking user access to DRM render nodes for Radeon."""
+    user = os.environ.get("SUDO_USER")
+    if not user:
+        detail("no invoking user; Radeon readings need render-node access")
+        return
+
+    groups = run(["id", "-nG", user], capture=True)
+    if groups.returncode != 0:
+        detail(f"could not determine groups for {user}: {groups.stderr.strip()}")
+        return
+    if "render" in groups.stdout.split():
+        return
+
+    group = run(["getent", "group", "render"], capture=True)
+    usermod = shutil.which("usermod")
+    if group.returncode != 0 or usermod is None:
+        detail("could not grant render-node access; the render group is unavailable")
+        return
+    result = run([usermod, "-aG", "render", user], capture=True)
+    if result.returncode != 0:
+        detail(f"could not add {user} to the render group: {result.stderr.strip()}")
+        return
+    detail(f"added {user} to the render group; log out and back in to apply")
+
+
 def grant_perfmon(target: Path) -> None:
-    """Give the binary CAP_PERFMON so the CPU and GPU perf counters can be read.
+    """Give the binary CAP_PERFMON so i915 GPU perf counters can be read.
 
     The kernel hands /proc-adjacent perf events to root by default
     (perf_event_paranoid is 3 on Debian), and the i915 GPU-busy counter is one of
