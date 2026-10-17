@@ -24,11 +24,11 @@
  *      interval. Needs the CAP_PERFMON the installer grants and the
  *      perf_event_paranoid the installer lowers.
  *
- *   4. Everything else. radeon (the older AMD driver), xe (the newest Intel),
- *      and the proprietary NVIDIA driver expose no busy value in sysfs at all.
- *      The card is STILL LISTED, with its name and `n/a`, because it is a GPU
- *      the machine has and the panel's job is to say so — only the value is
- *      missing, and hiding the card would report a machine that has no GPU.
+ *   4. radeon. The older AMD driver reports its current load in the DRM
+ *      debugfs file radeon_pm_info rather than the amdgpu sysfs attribute.
+ *
+ *   5. Other drivers without a readable busy counter are still listed, because
+ *      hiding them would report a machine that has no GPU.
  *
  * A card whose value cannot be read leaves its `present` at 0; one where a
  * reading is possible but two samples have not yet been taken leaves
@@ -357,9 +357,73 @@ static int sample_percent(const char *card, TopGpuDevice *device) {
     return 0;
 }
 
+/* The older radeon driver publishes its current GPU load in debugfs instead of
+   the amdgpu gpu_busy_percent sysfs attribute. Resolve the DRM minor from this
+   card's device node so the same path works for every card, not just card0. */
+static int sample_radeon_debugfs(TopGpuDevice *device) {
+    if (strcmp(device->driver, "radeon") != 0) {
+        return -1;
+    }
+
+    char path[TOP_TEXT];
+    snprintf(path, sizeof(path), DRM_DIR "/%.16s/dev", device->card);
+    unsigned int major = 0;
+    unsigned int minor = 0;
+    FILE *dev_file = fopen(path, "r");
+    if (!dev_file) {
+        return -1;
+    }
+    int matched = fscanf(dev_file, "%u:%u", &major, &minor);
+    fclose(dev_file);
+    if (matched != 2) {
+        return -1;
+    }
+    (void)major;
+
+    snprintf(path, sizeof(path),
+             "/sys/kernel/debug/dri/%u/radeon_pm_info", minor);
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        return -1;
+    }
+
+    long percent = -1;
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        char *load = strstr(line, "GPU load:");
+        if (!load) {
+            continue;
+        }
+        char *value = strchr(load, ':');
+        if (value) {
+            char *end = NULL;
+            long parsed = strtol(value + 1, &end, 10);
+            if (end != value + 1) {
+                percent = parsed;
+            }
+        }
+        break;
+    }
+    fclose(file);
+
+    if (percent < 0) {
+        return -1;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
+    device->usage = (double)percent;
+    device->has_reading = 1;
+    device->present = 1;
+    return 0;
+}
+
 /* Take one card's reading, whichever way its driver allows. */
 static void sample_device(TopGpuDevice *device, GpuReader *reader) {
     if (sample_percent(device->card, device) == 0) {
+        return;
+    }
+    if (sample_radeon_debugfs(device) == 0) {
         return;
     }
     if (sample_engines(reader, device) == 0) {
@@ -368,8 +432,7 @@ static void sample_device(TopGpuDevice *device, GpuReader *reader) {
     if (sample_perf(reader, device) == 0) {
         return;
     }
-    /* No path read a value: the card is listed, present stays as discovery set
-       it (0), and the panel shows n/a beside its name. */
+    /* No driver interface exposed a readable utilization value. */
 }
 
 /* --- discovery ------------------------------------------------------------- */

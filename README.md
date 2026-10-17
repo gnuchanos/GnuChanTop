@@ -7,10 +7,11 @@ the terminal. It is written in C, links nothing but libc, and is Debian-only, on
 purpose.
 
 Every GPU the machine has is listed, one to a line by name: an AMD APU, an Intel
-iGPU, a discrete card that loaded as `card1`, all of them, not only `card0`. A
-card whose driver exposes no busy value in sysfs (the older `radeon`, the newest
-`xe`, the proprietary NVIDIA) is still shown, with `n/a` beside its name, so it
-is clear the machine has it even when the number cannot be read. The rolling
+iGPU, a discrete card that loaded as `card1`, all of them, not only `card0`.
+The older AMD `radeon` driver reports its busy percentage through the DRM
+debugfs `radeon_pm_info` file; the newer `amdgpu` driver uses its sysfs counter.
+Cards whose driver exposes no generic busy value (such as `xe` or proprietary
+NVIDIA) remain listed and show `--` instead of a made-up percentage. The rolling
 graph follows the first card a reading is possible on.
 
 ## Building
@@ -28,7 +29,7 @@ The install also grants the binary `CAP_PERFMON` with `setcap` (from
 `libcap2-bin`, installed when missing) so the GPU perf counter can be read
 without running as root, and lowers `kernel.perf_event_paranoid` to 2 through
 `/etc/sysctl.d/99-gnuchantop.conf`. Without the capability the GPU reading shows
-`n/a`; the rest works.
+`--`; the rest works.
 
 The makefile takes an action as its first argument: `install` (the default),
 `build`, `run` and `uninstall`.

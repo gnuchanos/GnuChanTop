@@ -263,7 +263,7 @@ def grant_perfmon(target: Path) -> None:
 
     setcap comes from libcap2-bin, which is pulled in when it is missing. A
     machine without it still gets a working program; only the GPU reading falls
-    back to `n/a`.
+    back to `--`.
     """
     setcap = shutil.which("setcap")
     if setcap is None:
@@ -272,14 +272,14 @@ def grant_perfmon(target: Path) -> None:
              "libcap2-bin"], environment=apt_environment())
         setcap = shutil.which("setcap")
     if setcap is None:
-        detail("setcap is unavailable; the GPU reading will show n/a")
+        detail("setcap is unavailable; the GPU reading will show --")
         return
 
     result = run([setcap, "cap_perfmon+ep", str(target)], capture=True)
     if result.returncode == 0:
         detail(f"granted CAP_PERFMON to {target}")
     else:
-        detail("could not grant CAP_PERFMON; the GPU reading will show n/a")
+        detail("could not grant CAP_PERFMON; the GPU reading will show --")
         if result.stderr:
             detail(result.stderr.strip())
 

@@ -12,13 +12,13 @@
  * be read from a card depends on its driver:
  *
  *   amdgpu    /sys/class/drm/cardN/device/gpu_busy_percent is one integer 0..100.
- *   radeon    no such file — the older AMD driver exposes nothing, and the card
- *             is still listed, with no value, rather than hidden.
+ *   radeon    /sys/kernel/debug/dri/<minor>/radeon_pm_info reports GPU load.
  *   i915      per-engine millisecond counters under the card's gt directory,
  *             differenced between two reads, or the i915 perf event on older
  *             parts. See top_gpu.c.
- *   xe        the newest Intel driver; listed like radeon, no busy file here.
- *   nvidia    the proprietary driver has nothing in sysfs; listed, no value.
+ *   xe        the newest Intel driver; listed, no generic busy file here.
+ *   nvidia    the proprietary driver has no generic busy counter; listed,
+ *             no value.
  *
  * A card whose value cannot be read is still shown — with its name — because
  * seeing that a GPU exists, and whether it reads, is the point of the panel. A

@@ -9,7 +9,7 @@
  * reading. The right panel is part of the shape of the program — a person who
  * has seen btop expects a second panel there — and taking it away on the
  * machines that cannot fill it would make the program look broken rather than
- * different. When there is no reading the value shows `n/a` and the graph is
+ * different. When there is no reading the value shows `--` and the graph is
  * flat, which is the truth, where a hidden panel is not.
  *
  * Everything is drawn with the cursor moved to an absolute position and the line
@@ -254,7 +254,7 @@ static void draw_process(int row, int left, const TopProc *proc, int selected,
 /* --- a GPU line ------------------------------------------------------------ */
 
 /* One GPU's line inside the GPU box: its name on the left, its busy percentage
-   on the right, or `n/a` when the driver reports nothing. The name is truncated
+   on the right, or `--` when the driver reports nothing. The name is truncated
    to leave the value its column, so the line never reaches the right border.
    The value is dimmed when there is none, which reads as "this card is here but
    says nothing" rather than as a low number. */
@@ -268,7 +268,7 @@ static void draw_gpu_line(int row, int left, int width,
     if (gpu->has_reading) {
         snprintf(value, sizeof(value), "%5.1f%%", gpu->usage);
     } else {
-        snprintf(value, sizeof(value), "  n/a");
+        snprintf(value, sizeof(value), "   --");
     }
     int value_w = (int)strlen(value);
     int name_w = inner - value_w - 1;
@@ -358,7 +358,7 @@ void top_draw_frame(const TopFrame *frame) {
     top_graph_draw(frame->cpu_history, cpu_w - 4, 1, 0, CPU_R, CPU_G, CPU_B);
 
     /* The GPU box: one line per GPU the machine has — each with its name and its
-       busy percentage, or n/a — then the graph at the bottom. The box is as tall
+       busy percentage, or -- — then the graph at the bottom. The box is as tall
        as the CPU's, so the number of lines it offers is the core count. A machine
        with more GPUs than lines shows a count on the last line rather than
        dropping the extra ones silently, so "every GPU" stays true. */
