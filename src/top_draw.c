@@ -251,6 +251,49 @@ static void draw_process(int row, int left, const TopProc *proc, int selected,
     fputs(RESET, stdout);
 }
 
+/* --- a GPU line ------------------------------------------------------------ */
+
+/* One GPU's line inside the GPU box: its name on the left, its busy percentage
+   on the right, or `n/a` when the driver reports nothing. The name is truncated
+   to leave the value its column, so the line never reaches the right border.
+   The value is dimmed when there is none, which reads as "this card is here but
+   says nothing" rather than as a low number. */
+static void draw_gpu_line(int row, int left, int width,
+                          const TopGpuDevice *gpu) {
+    int inner = width - 4;
+    if (inner < 8) {
+        return;
+    }
+    char value[16];
+    if (gpu->has_reading) {
+        snprintf(value, sizeof(value), "%5.1f%%", gpu->usage);
+    } else {
+        snprintf(value, sizeof(value), "  n/a");
+    }
+    int value_w = (int)strlen(value);
+    int name_w = inner - value_w - 1;
+    if (name_w < 1) {
+        name_w = 1;
+    }
+
+    move_to(row, left + 2);
+    fg(GPU_R, GPU_G, GPU_B);
+    int written = (int)strlen(gpu->name);
+    if (written > name_w) {
+        written = name_w;
+    }
+    printf("%.*s", written, gpu->name);
+    for (int i = written; i < name_w; i++) {
+        putchar(' ');
+    }
+    putchar(' ');
+    if (!gpu->has_reading) {
+        fg(DIM_R, DIM_G, DIM_B);
+    }
+    fputs(value, stdout);
+    fputs(RESET, stdout);
+}
+
 /* --- the whole frame ------------------------------------------------------- */
 
 void top_draw_frame(const TopFrame *frame) {
@@ -314,22 +357,49 @@ void top_draw_frame(const TopFrame *frame) {
     move_to(graph_row, cpu_left + 2);
     top_graph_draw(frame->cpu_history, cpu_w - 4, 1, 0, CPU_R, CPU_G, CPU_B);
 
-    /* The GPU box: the usage line at the top, its graph at the bottom, and the
-       lines between left blank so the box is as tall as the CPU's. */
-    box_row(top_row + 1, gpu_left, gpu_w, GPU_R, GPU_G, GPU_B);
-    if (frame->config->show_gpu && frame->gpu->present && frame->gpu->has_reading) {
-        draw_meter(top_row + 1, gpu_left, gpu_w, "GPU", frame->gpu->usage,
-                   frame->cpu->temp_package,
-                   frame->cpu->has_temp && frame->cpu->temp_package > 0.0,
-                   GPU_R, GPU_G, GPU_B);
-    } else {
-        move_to(top_row + 1, gpu_left + 2);
-        fg(DIM_R, DIM_G, DIM_B);
-        printf("no reading on this machine");
-        fputs(RESET, stdout);
+    /* The GPU box: one line per GPU the machine has — each with its name and its
+       busy percentage, or n/a — then the graph at the bottom. The box is as tall
+       as the CPU's, so the number of lines it offers is the core count. A machine
+       with more GPUs than lines shows a count on the last line rather than
+       dropping the extra ones silently, so "every GPU" stays true. */
+    int gpu_lines = graph_row - (top_row + 1);
+    if (gpu_lines < 0) {
+        gpu_lines = 0;
     }
-    for (int row = top_row + 2; row < graph_row; row++) {
-        box_row(row, gpu_left, gpu_w, GPU_R, GPU_G, GPU_B);
+    for (int i = 0; i < gpu_lines; i++) {
+        box_row(top_row + 1 + i, gpu_left, gpu_w, GPU_R, GPU_G, GPU_B);
+    }
+    if (!frame->config->show_gpu) {
+        /* The panel is off; the box is drawn but its lines are left blank. */
+    } else if (frame->gpu->count == 0) {
+        if (gpu_lines > 0) {
+            move_to(top_row + 1, gpu_left + 2);
+            fg(DIM_R, DIM_G, DIM_B);
+            printf("no GPU on this machine");
+            fputs(RESET, stdout);
+        }
+    } else if (frame->gpu->count <= gpu_lines) {
+        /* Everything fits: every GPU, one to a line. */
+        for (int i = 0; i < frame->gpu->count; i++) {
+            draw_gpu_line(top_row + 1 + i, gpu_left, gpu_w,
+                          &frame->gpu->devices[i]);
+        }
+    } else if (gpu_lines == 1) {
+        /* One line for more than one GPU: the first is the one worth naming,
+           and a count would eat the line the name needs. */
+        draw_gpu_line(top_row + 1, gpu_left, gpu_w, &frame->gpu->devices[0]);
+    } else {
+        /* More GPUs than lines: the last line is a count of the rest, and the
+           lines above it are the first ones. */
+        int listed = gpu_lines - 1;
+        for (int i = 0; i < listed; i++) {
+            draw_gpu_line(top_row + 1 + i, gpu_left, gpu_w,
+                          &frame->gpu->devices[i]);
+        }
+        move_to(top_row + 1 + listed, gpu_left + 2);
+        fg(DIM_R, DIM_G, DIM_B);
+        printf("+%d more GPU(s)", frame->gpu->count - listed);
+        fputs(RESET, stdout);
     }
     box_row(graph_row, gpu_left, gpu_w, GPU_R, GPU_G, GPU_B);
     move_to(graph_row, gpu_left + 2);

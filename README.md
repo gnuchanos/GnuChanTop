@@ -6,6 +6,13 @@ keys walk and `k` kills from. It reads `/proc` and sysfs directly and draws to
 the terminal. It is written in C, links nothing but libc, and is Debian-only, on
 purpose.
 
+Every GPU the machine has is listed, one to a line by name: an AMD APU, an Intel
+iGPU, a discrete card that loaded as `card1`, all of them, not only `card0`. A
+card whose driver exposes no busy value in sysfs (the older `radeon`, the newest
+`xe`, the proprietary NVIDIA) is still shown, with `n/a` beside its name, so it
+is clear the machine has it even when the number cannot be read. The rolling
+graph follows the first card a reading is possible on.
+
 ## Building
 
     git clone <repository-url> GnuChanTop

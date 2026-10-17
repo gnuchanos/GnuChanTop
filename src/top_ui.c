@@ -94,8 +94,13 @@ static void take_sample(TopState *state) {
     top_procs_sample(&state->procs, total_jiffies(), state->cpu.core_count,
                      &state->config);
     top_history_push(&state->cpu_history, state->cpu.overall);
-    if (state->gpu.present && state->gpu.has_reading) {
-        top_history_push(&state->gpu_history, state->gpu.usage);
+    /* The graph follows ONE card — the first whose value can be read — so a
+       second GPU that cannot be read does not blank the line. The others are
+       still listed in the panel; only the rolling history needs a single
+       source. */
+    const TopGpuDevice *primary = top_gpu_primary(&state->gpu);
+    if (primary && primary->has_reading) {
+        top_history_push(&state->gpu_history, primary->usage);
     }
     top_procs_sort(&state->procs, state->config.sort);
     state->samples++;
