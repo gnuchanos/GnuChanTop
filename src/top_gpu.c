@@ -469,18 +469,26 @@ static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
         if (reader->radeon_fd < 0) {
             return -1;
         }
-        unsigned int status = 0;
-        if (read_radeon_grbm(reader->radeon_fd, &status) != 0) {
-            close(reader->radeon_fd);
-            reader->radeon_fd = -1;
-            return -1;
-        }
         int mutex_error = pthread_mutex_init(&reader->radeon_mutex, NULL);
         if (mutex_error != 0) {
             close(reader->radeon_fd);
             reader->radeon_fd = -1;
             return -1;
         }
+        unsigned int status = 0;
+        if (read_radeon_grbm(reader->radeon_fd, &status) != 0) {
+            pthread_mutex_destroy(&reader->radeon_mutex);
+            close(reader->radeon_fd);
+            reader->radeon_fd = -1;
+            return -1;
+        }
+        reader->radeon_samples[0] =
+            (status & RADEON_GUI_ACTIVE) != 0;
+        reader->radeon_sample_count = 1;
+        reader->radeon_sample_next = 1;
+        reader->radeon_usage = reader->radeon_samples[0] ? 100.0 : 0.0;
+        reader->radeon_has_reading = 1;
+
         int thread_error = pthread_create(&reader->radeon_thread, NULL,
                                          radeon_sampler, reader);
         if (thread_error != 0) {
