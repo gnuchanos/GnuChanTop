@@ -429,10 +429,8 @@ static void *radeon_sampler(void *argument) {
     for (;;) {
         unsigned int status = 0;
         if (read_radeon_grbm(reader->radeon_fd, &status) != 0) {
-            pthread_mutex_lock(&reader->radeon_mutex);
-            reader->radeon_has_reading = 0;
-            pthread_mutex_unlock(&reader->radeon_mutex);
-            return NULL;
+            nanosleep(&interval, NULL);
+            continue;
         }
 
         pthread_mutex_lock(&reader->radeon_mutex);
@@ -454,6 +452,7 @@ static void *radeon_sampler(void *argument) {
 
         nanosleep(&interval, NULL);
     }
+    return NULL;
 }
 
 /* Sample the legacy Radeon GRBM GUI-active bit at 20 Hz in a background thread.
@@ -467,12 +466,14 @@ static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
         reader->radeon_tried = 1;
         reader->radeon_fd = open_render_node(device->card);
         if (reader->radeon_fd < 0) {
+            reader->radeon_tried = 0;
             return -1;
         }
         int mutex_error = pthread_mutex_init(&reader->radeon_mutex, NULL);
         if (mutex_error != 0) {
             close(reader->radeon_fd);
             reader->radeon_fd = -1;
+            reader->radeon_tried = 0;
             return -1;
         }
         unsigned int status = 0;
@@ -480,6 +481,7 @@ static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
             pthread_mutex_destroy(&reader->radeon_mutex);
             close(reader->radeon_fd);
             reader->radeon_fd = -1;
+            reader->radeon_tried = 0;
             return -1;
         }
         reader->radeon_samples[0] =
@@ -495,6 +497,7 @@ static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
             pthread_mutex_destroy(&reader->radeon_mutex);
             close(reader->radeon_fd);
             reader->radeon_fd = -1;
+            reader->radeon_tried = 0;
             return -1;
         }
         pthread_detach(reader->radeon_thread);
