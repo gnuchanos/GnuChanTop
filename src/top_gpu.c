@@ -53,6 +53,10 @@
 /* The DRM class directory, where every card is a `cardN` entry. */
 #define DRM_DIR "/sys/class/drm"
 
+/* A sysfs engine path can contain the full fixed-size parent path and two
+   bounded device components; leave room for those joins without truncating. */
+#define GPU_PATH_TEXT (TOP_TEXT + 80)
+
 /* The most engine counters one card's i915 path tracks. */
 #define GPU_MAX_ENGINES 16
 #define RADEON_SAMPLE_COUNT 20
@@ -131,7 +135,7 @@ static void make_label(char *out, size_t size, long vendor, const char *driver) 
 /* --- per-card reader state ------------------------------------------------- */
 
 typedef struct {
-    char path[TOP_TEXT];  /* room for the card, tile, engine and `busy` */
+    char path[GPU_PATH_TEXT];  /* card, tile, engine and `busy` */
     long last_busy;       /* milliseconds reported by the last read */
     int  seen;            /* 1 once a first read has been taken */
 } EngineCounter;
@@ -180,7 +184,7 @@ static void discover_engines(const char *card, GpuReader *reader) {
         if (strncmp(tile->d_name, "gt", 2) != 0) {
             continue;
         }
-        char engine_dir[TOP_TEXT];
+        char engine_dir[TOP_TEXT + 32];
         snprintf(engine_dir, sizeof(engine_dir), "%s/%.16s/engines", gt_dir,
                  tile->d_name);
         DIR *engines_opened = opendir(engine_dir);
@@ -195,7 +199,7 @@ static void discover_engines(const char *card, GpuReader *reader) {
             if (reader->engine_count >= GPU_MAX_ENGINES) {
                 break;
             }
-            char busy_path[TOP_TEXT];
+            char busy_path[GPU_PATH_TEXT];
             snprintf(busy_path, sizeof(busy_path), "%s/%.32s/busy", engine_dir,
                      entry->d_name);
             FILE *probe = fopen(busy_path, "r");
