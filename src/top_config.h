@@ -1,8 +1,8 @@
 /*
  * top_config.h — the settings GnuChanTop reads from its own config file.
  *
- * The settings live in a small Python-shaped file, ~/.config/GnuChanTop/
- * GnuChanTop.py, and every one of them has a default, so the program runs
+ * The settings live in a plain-text file, ~/.config/GnuChanTop/
+ * GnuChanTop.conf, and every one of them has a default, so the program runs
  * whether or not that file is there — the same rule the other Gnuchan programs
  * follow. TopConfig is the whole of what that file can say; nothing else in the
  * program reads it.

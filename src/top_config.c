@@ -1,10 +1,8 @@
 /*
- * top_config.c — reading ~/.config/GnuChanTop/GnuChanTop.py.
+ * top_config.c — reading ~/.config/GnuChanTop/GnuChanTop.conf.
  *
- * The file is Python in shape and read as text, not executed. Each line is
- * `Key = value`, the `#` starts a comment and blank lines are skipped, which is
- * the whole grammar. It is parsed here rather than run so the program never
- * depends on a Python being present, and a line this does not understand is
+ * The file is plain Key=value text and is never executed. The `#` starts a
+ * comment and blank lines are skipped. A line this does not understand is
  * skipped rather than being a reason to stop: a monitor that will not start
  * because of one bad setting is worse than one that starts on the defaults.
  *
@@ -15,6 +13,8 @@
 #include "top_config.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,28 +65,59 @@ static char *trim(char *text) {
     return text;
 }
 
-/* Strip the quotes from a value, when it has them, and return the unquoted
-   text. A value is quoted in the shipped file so a value that is all spaces
-   can be told apart from no value at all. */
 static char *unquote(char *text) {
     size_t length = strlen(text);
-    if (length >= 2 && (text[0] == '"' || text[0] == '\'') &&
-        text[length - 1] == text[0]) {
+    if (length >= 2 &&
+        ((text[0] == '"' && text[length - 1] == '"') ||
+         (text[0] == '\'' && text[length - 1] == '\''))) {
         text[length - 1] = '\0';
         return text + 1;
     }
     return text;
 }
 
-/* A truthy value: the words the shipped file uses, with the number 0 as false
-   and anything else as true. */
-static int is_true(const char *value) {
-    if (strcmp(value, "1") == 0) return 1;
-    if (strcmp(value, "true") == 0) return 1;
-    if (strcmp(value, "True") == 0) return 1;
-    if (strcmp(value, "yes") == 0) return 1;
-    if (strcmp(value, "on") == 0) return 1;
+/* Parse an integer or decimal without accepting partial values such as
+   `12junk`. Invalid values leave their setting at the built-in default. */
+static int parse_double(const char *text, double *out) {
+    char *end = NULL;
+    errno = 0;
+    double value = strtod(text, &end);
+    if (end == text || errno == ERANGE || !isfinite(value) ||
+        *trim(end) != '\0') {
+        return -1;
+    }
+    *out = value;
     return 0;
+}
+
+static int parse_int(const char *text, int *out) {
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(text, &end, 10);
+    if (end == text || errno == ERANGE || *trim(end) != '\0' ||
+        value < 1 || value > 2147483647L) {
+        return -1;
+    }
+    *out = (int)value;
+    return 0;
+}
+
+static int parse_bool(const char *value, int *out) {
+    if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
+        strcmp(value, "True") == 0 || strcmp(value, "yes") == 0 ||
+        strcmp(value, "Yes") == 0 || strcmp(value, "on") == 0 ||
+        strcmp(value, "On") == 0) {
+        *out = 1;
+        return 0;
+    }
+    if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0 ||
+        strcmp(value, "False") == 0 || strcmp(value, "no") == 0 ||
+        strcmp(value, "No") == 0 || strcmp(value, "off") == 0 ||
+        strcmp(value, "Off") == 0) {
+        *out = 0;
+        return 0;
+    }
+    return -1;
 }
 
 /* --- the file -------------------------------------------------------------- */
@@ -97,12 +128,12 @@ static int is_true(const char *value) {
 static void config_path(char *out, size_t size) {
     const char *xdg = getenv("XDG_CONFIG_HOME");
     if (xdg && xdg[0]) {
-        snprintf(out, size, "%s/GnuChanTop/GnuChanTop.py", xdg);
+        snprintf(out, size, "%s/GnuChanTop/GnuChanTop.conf", xdg);
         return;
     }
     const char *home = getenv("HOME");
     if (home && home[0]) {
-        snprintf(out, size, "%s/.config/GnuChanTop/GnuChanTop.py", home);
+        snprintf(out, size, "%s/.config/GnuChanTop/GnuChanTop.conf", home);
         return;
     }
     out[0] = '\0';
@@ -120,6 +151,16 @@ int top_config_load(TopConfig *config) {
     }
 
     FILE *file = fopen(path, "r");
+    if (!file && errno == ENOENT) {
+        size_t length = strlen(path);
+        if (length >= 5 && strcmp(path + length - 5, ".conf") == 0 &&
+            length - 5 + 4 <= sizeof(path)) {
+            char legacy_path[sizeof(path)];
+            memcpy(legacy_path, path, length - 5);
+            memcpy(legacy_path + length - 5, ".py", 4);
+            file = fopen(legacy_path, "r");
+        }
+    }
     if (!file) {
         /* No file is normal, and not worth a message: the defaults are the
            settings a machine that never wrote one wants. */
@@ -151,17 +192,20 @@ int top_config_load(TopConfig *config) {
         char *value = unquote(trim(equals + 1));
 
         if (strcmp(key, "UpdateTime") == 0) {
-            double seconds = atof(value);
-            if (seconds > 0.05) {
+            double seconds = 0.0;
+            if (parse_double(value, &seconds) == 0 && seconds > 0.05) {
                 config->update_time = seconds;
             }
         } else if (strcmp(key, "ProcLimit") == 0) {
-            int limit = atoi(value);
-            if (limit > 0) {
+            int limit = 0;
+            if (parse_int(value, &limit) == 0) {
                 config->proc_limit = limit;
             }
         } else if (strcmp(key, "ShowGPU") == 0) {
-            config->show_gpu = is_true(value);
+            int show_gpu = 0;
+            if (parse_bool(value, &show_gpu) == 0) {
+                config->show_gpu = show_gpu;
+            }
         } else if (strcmp(key, "Sort") == 0) {
             TopSortKey key_value;
             if (top_sort_from_name(value, &key_value) == 0) {

@@ -86,12 +86,12 @@ static int read_number(const char *path, long *out) {
 /* Read a hexadecimal whole number from a file. The kernel writes the PCI vendor
    as "0x1002", which a plain %ld reads as 0 — the bug that made every card label
    come out "GPU 0x0". %lx reads it for what it is. */
-static int read_hex(const char *path, long *out) {
+static int read_hex(const char *path, unsigned long *out) {
     FILE *file = fopen(path, "r");
     if (!file) {
         return -1;
     }
-    long value = 0;
+    unsigned long value = 0;
     int matched = fscanf(file, "%lx", &value);
     fclose(file);
     if (matched != 1) {
@@ -113,14 +113,12 @@ static void read_driver_name(const char *card, char *out, size_t size) {
         return;
     }
     target[length] = '\0';
-    const char *slash = strrchr(target, '/');
-    if (slash && slash[1]) {
-        snprintf(out, size, "%.31s", slash + 1);
-    }
+    top_gpu_driver_from_link(target, out, size);
 }
 
 /* A card's label for the panel: the vendor and the driver. */
-static void make_label(char *out, size_t size, long vendor, const char *driver) {
+static void make_label(char *out, size_t size, unsigned long vendor,
+                       const char *driver) {
     const char *vendor_name = "GPU";
     if (vendor == 0x1002) {
         vendor_name = "AMD GPU";
@@ -167,6 +165,18 @@ typedef struct {
 } GpuReader;
 
 static GpuReader readers[TOP_MAX_GPUS];
+
+static void init_readers(void) {
+    static int initialized = 0;
+    if (initialized) {
+        return;
+    }
+    for (int i = 0; i < TOP_MAX_GPUS; i++) {
+        readers[i].perf_fd = -1;
+        readers[i].radeon_fd = -1;
+    }
+    initialized = 1;
+}
 
 /* --- i915 engine counters -------------------------------------------------- */
 
@@ -246,30 +256,40 @@ static int sample_engines(GpuReader *reader, TopGpuDevice *device) {
     }
 
     double busiest = 0.0;
+    int readable = 0;
+    int sampled = 0;
     for (int i = 0; i < reader->engine_count; i++) {
         long busy = 0;
         if (read_number(reader->engines[i].path, &busy) != 0) {
             continue;
         }
-        if (reader->engines[i].seen && elapsed > 0 &&
-            busy >= reader->engines[i].last_busy) {
-            double percent = ((double)(busy - reader->engines[i].last_busy) *
-                              100.0) / (double)elapsed;
-            if (percent > busiest) {
-                busiest = percent;
+        readable = 1;
+        if (reader->engines[i].seen && elapsed > 0) {
+            sampled = 1;
+            if (busy >= reader->engines[i].last_busy) {
+                double percent =
+                    ((double)(busy - reader->engines[i].last_busy) * 100.0) /
+                    (double)elapsed;
+                if (percent > busiest) {
+                    busiest = percent;
+                }
             }
         }
         reader->engines[i].last_busy = busy;
         reader->engines[i].seen = 1;
     }
     reader->engine_last_wall_ms = now;
+    if (!readable) {
+        return -1;
+    }
 
     if (busiest > 100.0) {
         busiest = 100.0;
     }
     device->usage = busiest;
-    device->has_reading = 1;
+    device->has_reading = sampled;
     device->present = 1;
+    device->status = sampled ? TOP_GPU_STATUS_READY : TOP_GPU_STATUS_WAITING;
     return 0;
 }
 
@@ -334,11 +354,15 @@ static int sample_perf(GpuReader *reader, TopGpuDevice *device) {
         if (percent > 100.0) percent = 100.0;
         device->usage = percent;
         device->has_reading = 1;
+        device->status = TOP_GPU_STATUS_READY;
     }
     reader->perf_last_busy_ns = busy;
     reader->perf_last_wall_ns = wall;
     reader->perf_seen = 1;
     device->present = 1;
+    if (!device->has_reading) {
+        device->status = TOP_GPU_STATUS_WAITING;
+    }
     return 0;
 }
 
@@ -376,6 +400,7 @@ static int sample_percent(const char *card, TopGpuDevice *device) {
     device->usage = (double)percent;
     device->has_reading = 1;
     device->present = 1;
+    device->status = TOP_GPU_STATUS_READY;
     return 0;
 }
 
@@ -530,11 +555,16 @@ static int sample_radeon_registers(TopGpuDevice *device, GpuReader *reader) {
     device->has_reading = reader->radeon_has_reading;
     pthread_mutex_unlock(&reader->radeon_mutex);
     device->present = device->has_reading;
+    device->status = device->has_reading ? TOP_GPU_STATUS_READY :
+                                           TOP_GPU_STATUS_WAITING;
     return device->has_reading ? 0 : -1;
 }
 
 /* Take one card's reading, whichever way its driver allows. */
 static void sample_device(TopGpuDevice *device, GpuReader *reader) {
+    device->present = 0;
+    device->has_reading = 0;
+    device->status = TOP_GPU_STATUS_UNAVAILABLE;
     if (sample_percent(device->card, device) == 0) {
         return;
     }
@@ -548,6 +578,7 @@ static void sample_device(TopGpuDevice *device, GpuReader *reader) {
         return;
     }
     /* No driver interface exposed a readable utilization value. */
+    device->status = TOP_GPU_STATUS_UNAVAILABLE;
 }
 
 /* --- discovery ------------------------------------------------------------- */
@@ -574,7 +605,7 @@ static int discover_devices(TopGpu *gpu) {
         char path[TOP_TEXT];
         snprintf(path, sizeof(path), DRM_DIR "/%.16s/device/vendor",
                  entry->d_name);
-        long vendor = 0;
+        unsigned long vendor = 0;
         read_hex(path, &vendor);   /* a card with no vendor file is still listed */
 
         read_driver_name(entry->d_name, device->driver, sizeof(device->driver));
@@ -582,6 +613,7 @@ static int discover_devices(TopGpu *gpu) {
         device->present = 0;
         device->has_reading = 0;
         device->usage = 0.0;
+        device->status = TOP_GPU_STATUS_UNAVAILABLE;
         gpu->count++;
     }
     closedir(drm);
@@ -610,6 +642,7 @@ int top_gpu_sample(TopGpu *gpu) {
        not -1, and a test on the struct cannot tell "not yet discovered" from
        "discovered, no primary". */
     static int discovered = 0;
+    init_readers();
     if (!discovered) {
         discover_devices(gpu);
         discovered = 1;

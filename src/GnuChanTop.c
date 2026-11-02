@@ -49,7 +49,7 @@ static void print_help(void) {
     printf("  q, Esc       quit\n");
     printf("\n");
     printf("The settings are read from\n");
-    printf("  ~/.config/GnuChanTop/GnuChanTop.py\n");
+    printf("  ~/.config/GnuChanTop/GnuChanTop.conf\n");
     printf("and every value has a default, so the program runs whether or not\n");
     printf("that file is there.\n");
 }

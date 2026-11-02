@@ -254,7 +254,7 @@ static void draw_process(int row, int left, const TopProc *proc, int selected,
 /* --- a GPU line ------------------------------------------------------------ */
 
 /* One GPU's line inside the GPU box: its name on the left, its busy percentage
-   on the right, or `--` when the driver reports nothing. The name is truncated
+   on the right, or a status when the driver reports no value. The name is truncated
    to leave the value its column, so the line never reaches the right border.
    The value is dimmed when there is none, which reads as "this card is here but
    says nothing" rather than as a low number. */
@@ -268,7 +268,7 @@ static void draw_gpu_line(int row, int left, int width,
     if (gpu->has_reading) {
         snprintf(value, sizeof(value), "%5.1f%%", gpu->usage);
     } else {
-        snprintf(value, sizeof(value), "   --");
+        snprintf(value, sizeof(value), "%s", top_gpu_status_label(gpu->status));
     }
     int value_w = (int)strlen(value);
     int name_w = inner - value_w - 1;

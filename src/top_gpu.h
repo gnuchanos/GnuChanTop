@@ -17,8 +17,7 @@
  *             differenced between two reads, or the i915 perf event on older
  *             parts. See top_gpu.c.
  *   xe        the newest Intel driver; listed, no generic busy file here.
- *   nvidia    the proprietary driver has no generic busy counter; listed,
- *             no value.
+ *   nvidia and nouveau have no generic busy counter; listed, no value.
  *
  * A card whose value cannot be read is still shown — with its name — because
  * seeing that a GPU exists, and whether it reads, is the point of the panel. A
@@ -27,20 +26,51 @@
 #ifndef GNUCHANTOP_GPU_H
 #define GNUCHANTOP_GPU_H
 
+#include <stdio.h>
+#include <string.h>
+
 #include "top_common.h"
 
 /* The most GPUs the panel lists. A machine with more — a render node's worth of
    accelerators — shows the first this many; a desktop never reaches it. */
 #define TOP_MAX_GPUS 6
 
+typedef enum {
+    TOP_GPU_STATUS_UNAVAILABLE = 0,
+    TOP_GPU_STATUS_WAITING,
+    TOP_GPU_STATUS_READY
+} TopGpuStatus;
+
+static inline void top_gpu_driver_from_link(const char *target, char *out,
+                                             size_t size) {
+    const char *name = target ? strrchr(target, '/') : NULL;
+    name = name ? name + 1 : target;
+    if (!name || !name[0]) {
+        snprintf(out, size, "unknown");
+        return;
+    }
+    snprintf(out, size, "%.31s", name);
+}
+
+static inline const char *top_gpu_status_label(TopGpuStatus status) {
+    if (status == TOP_GPU_STATUS_WAITING) {
+        return " WAIT";
+    }
+    if (status == TOP_GPU_STATUS_READY) {
+        return " READY";
+    }
+    return "  N/A";
+}
+
 /* One GPU: what it is, and how busy it is, which may be "unknown". */
 typedef struct {
     char   card[16];        /* the DRM node, "card0" */
     char   name[TOP_NAME];  /* a label for the panel, "AMD GPU (amdgpu)" */
     char   driver[32];      /* the kernel driver, for the label and for tests */
-    int    present;         /* 1 when a busy reading is possible on this GPU */
-    int    has_reading;     /* 1 once two samples have made a percentage */
+    int    present;         /* 1 when a busy-reading interface is available */
+    int    has_reading;     /* 1 once a percentage has been measured */
     double usage;           /* 0..100, meaningful when has_reading */
+    TopGpuStatus status;    /* unavailable, waiting for a baseline, or ready */
 } TopGpuDevice;
 
 /* Every GPU the machine has. */

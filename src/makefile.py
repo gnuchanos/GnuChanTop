@@ -41,12 +41,12 @@ PROGRAM = "GnuChanTop"
 BIN_DIR = Path("/usr/local/bin")
 DESKTOP_ENTRY = Path("/usr/share/applications/GnuChanTop.desktop")
 
-# The settings script, installed into the user's own config directory. It is
-# replaced on every install: the installer owns that file, and a machine
-# installing a new build has to get the settings that build ships with.
-CONFIG_SOURCE = ROOT / "GnuChanTop_config" / "GnuChanTop.py"
+# The settings file, installed into the user's own config directory only when
+# neither the current nor legacy settings file exists.
+CONFIG_SOURCE = ROOT / "GnuChanTop_config" / "GnuChanTop.conf"
 CONFIG_DIR_NAME = "GnuChanTop"
-CONFIG_FILE_NAME = "GnuChanTop.py"
+CONFIG_FILE_NAME = "GnuChanTop.conf"
+LEGACY_CONFIG_FILE_NAME = "GnuChanTop.py"
 
 SOURCES = (
     "top_config.c",
@@ -341,11 +341,10 @@ def grant_perfmon(target: Path) -> None:
 
 
 def install_config() -> None:
-    """Put the settings script where the program reads it.
+    """Put the plain-text settings where the program reads them.
 
-    The old file is removed first and the shipped one written in its place, the
-    same rule the other installers follow: the result is what this build ships
-    and nothing of what was there before.
+    A user's settings are left alone. An existing legacy file is also kept
+    rather than shadowed by a newly installed .conf file.
     """
     if not CONFIG_SOURCE.is_file():
         return
@@ -364,21 +363,25 @@ def install_config() -> None:
             f"nothing to read"
         )
 
-    script = directory / CONFIG_FILE_NAME
-    if script.exists():
-        script.unlink()
-        detail(f"removed the old {script}")
-    shutil.copyfile(CONFIG_SOURCE, script)
-    try:
-        os.chown(script, uid, gid)
-    except OSError:
-        pass
-    detail(f"installed {script}")
+    config = directory / CONFIG_FILE_NAME
+    legacy = directory / LEGACY_CONFIG_FILE_NAME
+    if config.exists() or legacy.exists():
+        existing = config if config.exists() else legacy
+        detail(f"kept the existing {existing}")
+        try:
+            os.chown(directory, uid, gid)
+            os.chown(existing, uid, gid)
+        except OSError:
+            pass
+        return
 
+    shutil.copyfile(CONFIG_SOURCE, config)
     try:
         os.chown(directory, uid, gid)
+        os.chown(config, uid, gid)
     except OSError:
         pass
+    detail(f"installed {config}")
 
 
 def uninstall() -> None:
